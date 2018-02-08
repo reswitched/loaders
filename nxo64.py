@@ -14,6 +14,7 @@
 # nxo64.py: IDA loader (and library for reading nso/nro files)
 
 import gzip, math, os, re, struct, sys
+from struct import unpack as up, pack as pk
 
 from io import BytesIO
 from cStringIO import StringIO
@@ -21,6 +22,48 @@ from cStringIO import StringIO
 import lz4.block
 
 uncompress = lz4.block.decompress
+
+def kip1_uncompress(compressed):
+    compressed_size, init_index, uncompressed_addl_size = up('<III', compressed[-0xC:])
+    decompressed = compressed[:] + '\x00' * uncompressed_addl_size
+    decompressed_size = len(decompressed)
+    if not (compressed_size + uncompressed_addl_size):
+        return ''
+    compressed = map(ord, compressed)
+    decompressed = map(ord, decompressed)
+    index = compressed_size - init_index
+    outindex = decompressed_size
+    while outindex > 0:
+        index -= 1
+        control = compressed[index]
+        for i in xrange(8):
+            if control & 0x80:
+                if index < 2:
+                    raise ValueError('Compression out of bounds!')
+                index -= 2
+                segmentoffset = compressed[index] | (compressed[index+1] << 8)
+                segmentsize = ((segmentoffset >> 12) & 0xF) + 3
+                segmentoffset &= 0x0FFF
+                segmentoffset += 2
+                if outindex < segmentsize:
+                    raise ValueError('Compression out of bounds!')
+                for j in xrange(segmentsize):
+                    if outindex + segmentoffset >= decompressed_size:
+                        raise ValueError('Compression out of bounds!')
+                    data = decompressed[outindex+segmentoffset]
+                    outindex -= 1
+                    decompressed[outindex] = data
+            else:
+                if outindex < 1:
+                    raise ValueError('Compression out of bounds!')
+                outindex -= 1
+                index -= 1
+                decompressed[outindex] = compressed[index]
+            control <<= 1
+            control &= 0xFF
+            if not outindex:
+                break
+    return ''.join(map(chr, decompressed))
 
 class BinFile(object):
     def __init__(self, li):
@@ -428,6 +471,46 @@ class NroFile(NxoFileBase):
 
         super(NroFile, self).__init__(f, tloc, tsize, rloc, rsize, dloc, dsize)
 
+class KipFile(NxoFileBase):
+    def __init__(self, fileobj):
+        f = BinFile(fileobj)
+
+        if f.read_from('4s', 0) != 'KIP1':
+            raise NxoException('Invalid KIP magic')
+
+        tloc, tsize, tfilesize = f.read_from('III', 0x20)
+        rloc, rsize, rfilesize = f.read_from('III', 0x30)
+        dloc, dsize, dfilesize = f.read_from('III', 0x40)
+        
+        toff = 0x100
+        roff = toff + tfilesize
+        doff = roff + rfilesize
+
+        
+        bsssize = f.read_from('I', 0x18)
+
+        print 'load text: ' 
+        text = kip1_uncompress(str(f.read_from(tfilesize, toff)))
+        ro   = kip1_uncompress(str(f.read_from(rfilesize, roff)))
+        data = kip1_uncompress(str(f.read_from(dfilesize, doff)))
+        
+        
+        full = text
+        if rloc >= len(full):
+            full += '\0' * (rloc - len(full))
+        else:
+            print 'truncating?'
+            full = full[:rloc]
+        full += ro
+        if dloc >= len(full):
+            full += '\0' * (dloc - len(full))
+        else:
+            print 'truncating?'
+            full = full[:dloc]
+        full += data
+
+        super(KipFile, self).__init__(BinFile(StringIO(full)), tloc, tsize, rloc, rsize, dloc, dsize)
+
 
 class NxoException(Exception):
     pass
@@ -441,8 +524,10 @@ def load_nxo(fileobj):
         return NsoFile(fileobj)
     elif header[0x10:0x14] == 'NRO0':
         return NroFile(fileobj)
+    elif header[:4] == 'KIP1':
+        return KipFile(fileobj)
     else:
-        raise NxoException("not an NRO or NSO file")
+        raise NxoException("not an NRO or NSO or KIP file")
 
 
 try:
@@ -456,10 +541,13 @@ else:
         if not isinstance(n, (int,long)) or n == 0:
             li.seek(0)
             if li.read(4) == 'NSO0':
-                return 'nxo64.py: Switch binary (NSO)'
+                return 'nxo.py: Switch binary (NSO)'
+            li.seek(0)
+            if li.read(4) == 'KIP1':
+                return 'nxo.py: Switch binary (KIP)'
             li.seek(0x10)
             if li.read(4) == 'NRO0':
-                return 'nxo64.py: Switch binary (NRO)'
+                return 'nxo.py: Switch binary (NRO)'
         return 0
 
     def ida_make_offset(f, ea):
