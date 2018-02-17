@@ -494,9 +494,9 @@ class KipFile(NxoFileBase):
         bsssize = f.read_from('I', 0x18)
 
         print 'load text: ' 
-        text = kip1_uncompress(str(f.read_from(tfilesize, toff)))
-        ro   = kip1_uncompress(str(f.read_from(rfilesize, roff)))
-        data = kip1_uncompress(str(f.read_from(dfilesize, doff)))
+        text = kip1_blz_decompress(str(f.read_from(tfilesize, toff)))
+        ro   = kip1_blz_decompress(str(f.read_from(rfilesize, roff)))
+        data = kip1_blz_decompress(str(f.read_from(dfilesize, doff)))
         
         
         full = text
