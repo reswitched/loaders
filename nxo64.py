@@ -25,12 +25,11 @@ uncompress = lz4.block.decompress
 
 def kip1_blz_decompress(compressed):
     compressed_size, init_index, uncompressed_addl_size = struct.unpack('<III', compressed[-0xC:])
-    if len(compressed) != compressed_size:
-        # ugly hack, sorry
-        assert len(compressed) == compressed_size + 1
-        init_index -= 1
     decompressed = compressed[:] + '\x00' * uncompressed_addl_size
     decompressed_size = len(decompressed)
+    if len(compressed) != compressed_size:
+        assert len(compressed) > compressed_size
+        compressed = compressed[len(compressed) - compressed_size:]
     if not (compressed_size + uncompressed_addl_size):
         return ''
     compressed = map(ord, compressed)
