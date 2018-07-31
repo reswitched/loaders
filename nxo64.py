@@ -247,14 +247,32 @@ class ElfSym(object):
 
 
 class NxoFileBase(object):
-    def __init__(self, f, tloc, tsize, rloc, rsize, dloc, dsize):
-        self.textoff    = tloc
-        self.textsize   = tsize
-        self.rodataoff  = rloc
-        self.rodatasize = rsize
-        self.dataoff    = dloc
-        flatsize = dloc + dsize
-
+    # segment = (content, file offset, vaddr, vsize)
+    def __init__(self, text, ro, data, bsssize):
+        self.text = text
+        self.ro = ro
+        self.data = data
+        self.bsssize = bsssize
+        self.textoff = text[2]
+        self.textsize = text[3]
+        self.rodataoff = ro[2]
+        self.rodatasize = ro[3]
+        self.dataoff = data[2]
+        flatsize = data[2] + data[3]
+        
+        full = text[0]
+        if ro[2] >= len(full):
+            full += '\0' * (ro[2] - len(full))
+        else:
+            print 'truncating .text?'
+            full = full[:ro[2]]
+        full += ro[0]
+        if data[2] > len(full):
+            full += '\0' * (data[2] - len(full))
+        else:
+            print 'truncating .rodata?'
+        full += data[0]
+        f = BinFile(StringIO(full))
 
         self.binfile = f
 
@@ -430,6 +448,8 @@ class NsoFile(NxoFileBase):
         if f.read_from('4s', 0) != 'NSO0':
             raise NxoException('Invalid NSO magic')
 
+        flags = f.read_from('I', 0xC)
+
         toff, tloc, tsize = f.read_from('III', 0x10)
         roff, rloc, rsize = f.read_from('III', 0x20)
         doff, dloc, dsize = f.read_from('III', 0x30)
@@ -438,25 +458,11 @@ class NsoFile(NxoFileBase):
         bsssize = f.read_from('I', 0x3C)
 
         print 'load text: '
-        text = uncompress(f.read_from(tfilesize, toff), uncompressed_size=tsize)
-        ro   = uncompress(f.read_from(rfilesize, roff), uncompressed_size=rsize)
-        data = uncompress(f.read_from(dfilesize, doff), uncompressed_size=dsize)
+        text = (uncompress(f.read_from(tfilesize, toff), uncompressed_size=tsize), None, tloc, tsize) if flags & 1 else (f.read_from(tfilesize, toff), toff, tloc, tsize)
+        ro   = (uncompress(f.read_from(rfilesize, roff), uncompressed_size=rsize), None, rloc, rsize) if flags & 2 else (f.read_from(rfilesize, roff), roff, rloc, rsize)
+        data = (uncompress(f.read_from(dfilesize, doff), uncompressed_size=dsize), None, dloc, dsize) if flags & 4 else (f.read_from(dfilesize, doff), doff, dloc, dsize)
 
-        full = text
-        if rloc >= len(full):
-            full += '\0' * (rloc - len(full))
-        else:
-            print 'truncating?'
-            full = full[:rloc]
-        full += ro
-        if dloc >= len(full):
-            full += '\0' * (dloc - len(full))
-        else:
-            print 'truncating?'
-            full = full[:dloc]
-        full += data
-
-        super(NsoFile, self).__init__(BinFile(StringIO(full)), tloc, tsize, rloc, rsize, dloc, dsize)
+        super(NsoFile, self).__init__(text, ro, data, bsssize)
 
 
 class NroFile(NxoFileBase):
@@ -471,8 +477,13 @@ class NroFile(NxoFileBase):
         tloc, tsize = f.read('II')
         rloc, rsize = f.read('II')
         dloc, dsize = f.read('II')
+        bsssize = f.read_from('I', 0x28)
+        
+        text = (f.read_from(tloc, tsize), tloc, tloc, tsize)
+        ro   = (f.read_from(rloc, rsize), rloc, rloc, rsize)
+        data = (f.read_from(dloc, dsize), dloc, dloc, dsize)
 
-        super(NroFile, self).__init__(f, tloc, tsize, rloc, rsize, dloc, dsize)
+        super(NroFile, self).__init__(text, ro, data, bsssize)
 
 class KipFile(NxoFileBase):
     def __init__(self, fileobj):
@@ -481,6 +492,8 @@ class KipFile(NxoFileBase):
         if f.read_from('4s', 0) != 'KIP1':
             raise NxoException('Invalid KIP magic')
 
+        flags = f.read_from('b', 0x1F)
+            
         tloc, tsize, tfilesize = f.read_from('III', 0x20)
         rloc, rsize, rfilesize = f.read_from('III', 0x30)
         dloc, dsize, dfilesize = f.read_from('III', 0x40)
@@ -489,30 +502,15 @@ class KipFile(NxoFileBase):
         roff = toff + tfilesize
         doff = roff + rfilesize
 
-        
-        bsssize = f.read_from('I', 0x18)
+        bsssize = f.read_from('I', 0x54)
+        print 'bss size 0x%x' % bsssize
 
-        print 'load text: ' 
-        text = kip1_blz_decompress(str(f.read_from(tfilesize, toff)))
-        ro   = kip1_blz_decompress(str(f.read_from(rfilesize, roff)))
-        data = kip1_blz_decompress(str(f.read_from(dfilesize, doff)))
-        
-        
-        full = text
-        if rloc >= len(full):
-            full += '\0' * (rloc - len(full))
-        else:
-            print 'truncating?'
-            full = full[:rloc]
-        full += ro
-        if dloc >= len(full):
-            full += '\0' * (dloc - len(full))
-        else:
-            print 'truncating?'
-            full = full[:dloc]
-        full += data
+        print 'load segments'
+        text = (kip1_blz_decompress(str(f.read_from(tfilesize, toff))), None, tloc, tsize) if flags & 1 else (f.read_from(tfilesize, toff), toff, tloc, tsize)
+        ro   = (kip1_blz_decompress(str(f.read_from(rfilesize, roff))), None, rloc, rsize) if flags & 2 else (f.read_from(rfilesize, roff), roff, rloc, rsize)
+        data = (kip1_blz_decompress(str(f.read_from(dfilesize, doff))), None, dloc, dsize) if flags & 4 else (f.read_from(dfilesize, doff), doff, dloc, dsize)
 
-        super(KipFile, self).__init__(BinFile(StringIO(full)), tloc, tsize, rloc, rsize, dloc, dsize)
+        super(KipFile, self).__init__(text, ro, data, bsssize)
 
 
 class NxoException(Exception):
@@ -592,6 +590,12 @@ else:
         f.binfile.seek(0)
         as_string = f.binfile.read(f.bssoff)
         idaapi.mem2base(as_string, loadbase)
+        if f.text[1] != None:
+            li.file2base(f.text[1], loadbase + f.text[2], loadbase + f.text[2] + f.text[3], True)
+        if f.ro[1] != None:
+            li.file2base(f.ro[1], loadbase + f.ro[2], loadbase + f.ro[2] + f.ro[3], True)
+        if f.data[1] != None:
+            li.file2base(f.data[1], loadbase + f.data[2], loadbase + f.data[2] + f.data[3], True)
 
         for start, end, name, kind in f.sections:
             if name.startswith('.got'):
