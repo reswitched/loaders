@@ -533,7 +533,8 @@ def load_nxo(fileobj):
 
 try:
     import idaapi
-    import idc
+    from idc import *
+    from idc_bc695 import *
 except ImportError:
     pass
 else:
@@ -553,10 +554,10 @@ else:
 
     def ida_make_offset(f, ea):
         if f.armv7:
-            idc.MakeDword(ea)
+            MakeDword(ea)
         else:
-            idc.MakeQword(ea)
-        idc.OpOff(ea, 0, 0)
+            MakeQword(ea)
+        OpOff(ea, 0, 0)
 
     def find_bl_targets(text_start, text_end):
         targets = set()
@@ -574,14 +575,14 @@ else:
         return targets
 
     def load_file(li, neflags, format):
-        idaapi.set_processor_type("arm", SETPROC_ALL|SETPROC_FATAL)
+        idaapi.set_processor_type("arm", idaapi.SETPROC_ALL|idaapi.SETPROC_FATAL)
         f = load_nxo(li)
         if f.armv7:
-            idc.SetShortPrm(idc.INF_LFLAGS, idc.GetShortPrm(idc.INF_LFLAGS) | idc.LFLG_PC_FLAT)
+            SetShortPrm(INF_LFLAGS, GetShortPrm(INF_LFLAGS) | LFLG_PC_FLAT)
         else:
-            idc.SetShortPrm(idc.INF_LFLAGS, idc.GetShortPrm(idc.INF_LFLAGS) | idc.LFLG_64BIT)
+            SetShortPrm(INF_LFLAGS, GetShortPrm(INF_LFLAGS) | LFLG_64BIT)
 
-        idc.SetCharPrm(idc.INF_DEMNAMES, idaapi.DEMNAM_GCC3)
+        SetCharPrm(INF_DEMNAMES, idaapi.DEMNAM_GCC3)
         idaapi.set_compiler_id(idaapi.COMP_GNU)
         idaapi.add_til2('gnulnx_arm' if f.armv7 else 'gnulnx_arm64', 1)
 
@@ -628,7 +629,7 @@ else:
         idaapi.update_segm(segm)
         for i,s in enumerate(f.symbols):
             if not s.shndx and s.name:
-                idc.MakeQword(undef_ea)
+                MakeQword(undef_ea)
                 idaapi.do_name_anyway(undef_ea, s.name)
                 s.resolved = undef_ea
                 undef_ea += undef_entry_size
@@ -683,7 +684,7 @@ else:
         funcs |= find_bl_targets(loadbase, loadbase+f.textsize)
 
         for addr in sorted(funcs, reverse=True):
-            idc.AutoMark(addr, AU_CODE)
-            idc.AutoMark(addr, AU_PROC)
+            AutoMark(addr, AU_CODE)
+            AutoMark(addr, AU_PROC)
 
         return 1
