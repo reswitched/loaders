@@ -479,9 +479,9 @@ class NroFile(NxoFileBase):
         dloc, dsize = f.read('II')
         bsssize = f.read_from('I', 0x28)
         
-        text = (f.read_from(tloc, tsize), tloc, tloc, tsize)
-        ro   = (f.read_from(rloc, rsize), rloc, rloc, rsize)
-        data = (f.read_from(dloc, dsize), dloc, dloc, dsize)
+        text = (f.read_from(tsize, tloc), tloc, tloc, tsize)
+        ro   = (f.read_from(rsize, rloc), rloc, rloc, rsize)
+        data = (f.read_from(dsize, dloc), dloc, dloc, dsize)
 
         super(NroFile, self).__init__(text, ro, data, bsssize)
 
