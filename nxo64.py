@@ -294,6 +294,11 @@ class NxoFileBase(object):
         self.datasize = self.bssoff - self.dataoff
         self.bsssize = self.bssend - self.bssoff
 
+        self.isLibnx = False
+        if f.read('4s') == 'LNY0':
+            self.isLibnx = True
+            self.libnx_got_start    = self.modoff + f.read('i')
+            self.libnx_got_end      = self.modoff + f.read('i')
 
         self.segment_builder = builder = SegmentBuilder()
         for off,sz,name,kind in [
@@ -345,29 +350,31 @@ class NxoFileBase(object):
 
         # load .dynsym
         self.symbols = symbols = []
-        f.seek(dynamic[DT_SYMTAB])
-        while True:
-            if dynamic[DT_SYMTAB] < dynamic[DT_STRTAB] and f.tell() >= dynamic[DT_STRTAB]:
-                break
-            if self.armv7:
-                st_name, st_value, st_size, st_info, st_other, st_shndx = f.read('IIIBBH')
-            else:
-                st_name, st_info, st_other, st_shndx, st_value, st_size = f.read('IBBHQQ')
-            if st_name > len(self.dynstr):
-                break
-            symbols.append(ElfSym(self.get_dynstr(st_name), st_info, st_other, st_shndx, st_value, st_size))
-        builder.add_section('.dynsym', dynamic[DT_SYMTAB], end=f.tell())
+        if DT_SYMTAB in dynamic and DT_STRTAB in dynamic:
+            f.seek(dynamic[DT_SYMTAB])
+            while True:
+                if dynamic[DT_SYMTAB] < dynamic[DT_STRTAB] and f.tell() >= dynamic[DT_STRTAB]:
+                    break
+                if self.armv7:
+                    st_name, st_value, st_size, st_info, st_other, st_shndx = f.read('IIIBBH')
+                else:
+                    st_name, st_info, st_other, st_shndx, st_value, st_size = f.read('IBBHQQ')
+                if st_name > len(self.dynstr):
+                    break
+                symbols.append(ElfSym(self.get_dynstr(st_name), st_info, st_other, st_shndx, st_value, st_size))
+            builder.add_section('.dynsym', dynamic[DT_SYMTAB], end=f.tell())
 
         self.plt_entries = []
         self.relocations = []
         locations = set()
-        if DT_REL in dynamic:
+        plt_got_end = None
+        if DT_REL in dynamic and DT_RELSZ in dynamic:
             locations |= self.process_relocations(f, symbols, dynamic[DT_REL], dynamic[DT_RELSZ])
 
-        if DT_RELA in dynamic:
+        if DT_RELA in dynamic and DT_RELASZ in dynamic:
             locations |= self.process_relocations(f, symbols, dynamic[DT_RELA], dynamic[DT_RELASZ])
 
-        if DT_JMPREL in dynamic:
+        if DT_JMPREL in dynamic and DT_PLTRELSZ in dynamic:
             pltlocations = self.process_relocations(f, symbols, dynamic[DT_JMPREL], dynamic[DT_PLTRELSZ])
             locations |= pltlocations
 
@@ -399,14 +406,18 @@ class NxoFileBase(object):
                 builder.add_section('.plt', min(self.plt_entries)[0], end=max(self.plt_entries)[0] + 0x10)
 
             # try to find the ".got" which should follow the ".got.plt"
-            good = False
-            got_end = plt_got_end + self.offsize
-            while got_end in locations and (DT_INIT_ARRAY not in dynamic or got_end < dynamic[DT_INIT_ARRAY]):
-                good = True
-                got_end += self.offsize
+            if not self.isLibnx:
+                if plt_got_end is not None:
+                    good = False
+                    got_end = plt_got_end + self.offsize
+                    while got_end in locations and (DT_INIT_ARRAY not in dynamic or got_end < dynamic[DT_INIT_ARRAY]):
+                        good = True
+                        got_end += self.offsize
 
-            if good:
-                builder.add_section('.got', plt_got_end, end=got_end)
+                    if good:
+                        builder.add_section('.got', plt_got_end, end=got_end)
+        if self.isLibnx:
+            builder.add_section('.got', self.libnx_got_start, end=self.libnx_got_end)
 
         self.sections = []
         for start, end, name, kind in builder.flatten():
