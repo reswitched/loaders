@@ -13,33 +13,47 @@
 
 # nxo64.py: IDA loader (and library for reading nso/nro files)
 
+from __future__ import print_function
+
 import gzip, math, os, re, struct, sys
 from struct import unpack as up, pack as pk
 
 from io import BytesIO
-from cStringIO import StringIO
 
 import lz4.block
 
 uncompress = lz4.block.decompress
 
+if sys.version_info[0] == 3:
+    iter_range = range
+    int_types = (int,)
+    ascii_string = lambda b: b.decode('ascii')
+    bytes_to_list = lambda b: list(b)
+    list_to_bytes = lambda l: bytes(l)
+else:
+    iter_range = xrange
+    int_types = (int, long)
+    ascii_string = lambda b: str(b)
+    bytes_to_list = lambda b: map(ord, b)
+    list_to_bytes = lambda l: ''.join(map(chr, l))
+
 def kip1_blz_decompress(compressed):
     compressed_size, init_index, uncompressed_addl_size = struct.unpack('<III', compressed[-0xC:])
-    decompressed = compressed[:] + '\x00' * uncompressed_addl_size
+    decompressed = compressed[:] + b'\x00' * uncompressed_addl_size
     decompressed_size = len(decompressed)
     if len(compressed) != compressed_size:
         assert len(compressed) > compressed_size
         compressed = compressed[len(compressed) - compressed_size:]
     if not (compressed_size + uncompressed_addl_size):
-        return ''
-    compressed = map(ord, compressed)
-    decompressed = map(ord, decompressed)
+        return b''
+    compressed = bytes_to_list(compressed)
+    decompressed = bytes_to_list(decompressed)
     index = compressed_size - init_index
     outindex = decompressed_size
     while outindex > 0:
         index -= 1
         control = compressed[index]
-        for i in xrange(8):
+        for i in iter_range(8):
             if control & 0x80:
                 if index < 2:
                     raise ValueError('Compression out of bounds!')
@@ -50,7 +64,7 @@ def kip1_blz_decompress(compressed):
                 segmentoffset += 2
                 if outindex < segmentsize:
                     raise ValueError('Compression out of bounds!')
-                for j in xrange(segmentsize):
+                for j in iter_range(segmentsize):
                     if outindex + segmentoffset >= decompressed_size:
                         raise ValueError('Compression out of bounds!')
                     data = decompressed[outindex+segmentoffset]
@@ -66,7 +80,7 @@ def kip1_blz_decompress(compressed):
             control &= 0xFF
             if not outindex:
                 break
-    return ''.join(map(chr, decompressed))
+    return list_to_bytes(decompressed)
 
 class BinFile(object):
     def __init__(self, li):
@@ -109,7 +123,7 @@ class BinFile(object):
 (DT_NULL, DT_NEEDED, DT_PLTRELSZ, DT_PLTGOT, DT_HASH, DT_STRTAB, DT_SYMTAB, DT_RELA, DT_RELASZ,
  DT_RELAENT, DT_STRSZ, DT_SYMENT, DT_INIT, DT_FINI, DT_SONAME, DT_RPATH, DT_SYMBOLIC, DT_REL,
  DT_RELSZ, DT_RELENT, DT_PLTREL, DT_DEBUG, DT_TEXTREL, DT_JMPREL, DT_BIND_NOW, DT_INIT_ARRAY,
- DT_FINI_ARRAY, DT_INIT_ARRAYSZ, DT_FINI_ARRAYSZ, DT_RUNPATH, DT_FLAGS) = xrange(31)
+ DT_FINI_ARRAY, DT_INIT_ARRAYSZ, DT_FINI_ARRAYSZ, DT_RUNPATH, DT_FLAGS) = iter_range(31)
 DT_GNU_HASH = 0x6ffffef5
 DT_VERSYM = 0x6ffffff0
 DT_RELACOUNT = 0x6ffffff9
@@ -199,6 +213,8 @@ class SegmentBuilder(object):
 
     def add_section(self, name, start, end=None, size=None):
         assert end is None or size is None
+        if size == 0:
+            return
         if size is None:
             size = end-start
         assert size > 0
@@ -262,17 +278,17 @@ class NxoFileBase(object):
         
         full = text[0]
         if ro[2] >= len(full):
-            full += '\0' * (ro[2] - len(full))
+            full += b'\x00' * (ro[2] - len(full))
         else:
-            print 'truncating .text?'
+            print('truncating .text?')
             full = full[:ro[2]]
         full += ro[0]
         if data[2] > len(full):
-            full += '\0' * (data[2] - len(full))
+            full += b'\x00' * (data[2] - len(full))
         else:
-            print 'truncating .rodata?'
+            print('truncating .rodata?')
         full += data[0]
-        f = BinFile(StringIO(full))
+        f = BinFile(BytesIO(full))
 
         self.binfile = f
 
@@ -280,7 +296,7 @@ class NxoFileBase(object):
         self.modoff = f.read_from('I', 4)
 
         f.seek(self.modoff)
-        if f.read('4s') != 'MOD0':
+        if f.read('4s') != b'MOD0':
             raise NxoException('invalid MOD0 magic')
 
         self.dynamicoff = self.modoff + f.read('i')
@@ -317,7 +333,7 @@ class NxoFileBase(object):
         self.dynamic = dynamic = {}
         for i in MULTIPLE_DTS:
             dynamic[i] = []
-        for i in xrange((flatsize - self.dynamicoff) / 0x10):
+        for i in iter_range((flatsize - self.dynamicoff) // 0x10):
             tag, val = f.read('II' if self.armv7 else 'QQ')
             if tag == DT_NULL:
                 break
@@ -332,8 +348,8 @@ class NxoFileBase(object):
             f.seek(dynamic[DT_STRTAB])
             self.dynstr = f.read(dynamic[DT_STRSZ])
         else:
-            self.dynstr = '\0'
-            print 'warning: no dynstr'
+            self.dynstr = b'\x00'
+            print('warning: no dynstr')
 
         for startkey, szkey, name in [
             (DT_STRTAB, DT_STRSZ, '.dynstr'),
@@ -428,7 +444,7 @@ class NxoFileBase(object):
         locations = set()
         f.seek(offset)
         relocsize = 8 if self.armv7 else 0x18
-        for i in xrange(size / relocsize):
+        for i in iter_range(size // relocsize):
             # NOTE: currently assumes all armv7 relocs have no addends,
             # and all 64-bit ones do.
             if self.armv7:
@@ -449,14 +465,14 @@ class NxoFileBase(object):
         return locations
 
     def get_dynstr(self, o):
-        return self.dynstr[o:self.dynstr.index('\0', o)]
+        return ascii_string(self.dynstr[o:self.dynstr.index(b'\x00', o)])
 
 
 class NsoFile(NxoFileBase):
     def __init__(self, fileobj):
         f = BinFile(fileobj)
 
-        if f.read_from('4s', 0) != 'NSO0':
+        if f.read_from('4s', 0) != b'NSO0':
             raise NxoException('Invalid NSO magic')
 
         flags = f.read_from('I', 0xC)
@@ -468,7 +484,7 @@ class NsoFile(NxoFileBase):
         tfilesize, rfilesize, dfilesize = f.read_from('III', 0x60)
         bsssize = f.read_from('I', 0x3C)
 
-        print 'load text: '
+        print('load text: ')
         text = (uncompress(f.read_from(tfilesize, toff), uncompressed_size=tsize), None, tloc, tsize) if flags & 1 else (f.read_from(tfilesize, toff), toff, tloc, tsize)
         ro   = (uncompress(f.read_from(rfilesize, roff), uncompressed_size=rsize), None, rloc, rsize) if flags & 2 else (f.read_from(rfilesize, roff), roff, rloc, rsize)
         data = (uncompress(f.read_from(dfilesize, doff), uncompressed_size=dsize), None, dloc, dsize) if flags & 4 else (f.read_from(dfilesize, doff), doff, dloc, dsize)
@@ -480,7 +496,7 @@ class NroFile(NxoFileBase):
     def __init__(self, fileobj):
         f = BinFile(fileobj)
 
-        if f.read_from('4s', 0x10) != 'NRO0':
+        if f.read_from('4s', 0x10) != b'NRO0':
             raise NxoException('Invalid NRO magic')
 
         f.seek(0x20)
@@ -500,7 +516,7 @@ class KipFile(NxoFileBase):
     def __init__(self, fileobj):
         f = BinFile(fileobj)
 
-        if f.read_from('4s', 0) != 'KIP1':
+        if f.read_from('4s', 0) != b'KIP1':
             raise NxoException('Invalid KIP magic')
 
         flags = f.read_from('b', 0x1F)
@@ -514,12 +530,12 @@ class KipFile(NxoFileBase):
         doff = roff + rfilesize
 
         bsssize = f.read_from('I', 0x54)
-        print 'bss size 0x%x' % bsssize
+        print('bss size 0x%x' % bsssize)
 
-        print 'load segments'
-        text = (kip1_blz_decompress(str(f.read_from(tfilesize, toff))), None, tloc, tsize) if flags & 1 else (f.read_from(tfilesize, toff), toff, tloc, tsize)
-        ro   = (kip1_blz_decompress(str(f.read_from(rfilesize, roff))), None, rloc, rsize) if flags & 2 else (f.read_from(rfilesize, roff), roff, rloc, rsize)
-        data = (kip1_blz_decompress(str(f.read_from(dfilesize, doff))), None, dloc, dsize) if flags & 4 else (f.read_from(dfilesize, doff), doff, dloc, dsize)
+        print('load segments')
+        text = (kip1_blz_decompress(f.read_from(tfilesize, toff)), None, tloc, tsize) if flags & 1 else (f.read_from(tfilesize, toff), toff, tloc, tsize)
+        ro   = (kip1_blz_decompress(f.read_from(rfilesize, roff)), None, rloc, rsize) if flags & 2 else (f.read_from(rfilesize, roff), roff, rloc, rsize)
+        data = (kip1_blz_decompress(f.read_from(dfilesize, doff)), None, dloc, dsize) if flags & 4 else (f.read_from(dfilesize, doff), doff, dloc, dsize)
 
         super(KipFile, self).__init__(text, ro, data, bsssize)
 
@@ -532,11 +548,11 @@ def load_nxo(fileobj):
     fileobj.seek(0)
     header = fileobj.read(0x14)
 
-    if header[:4] == 'NSO0':
+    if header[:4] == b'NSO0':
         return NsoFile(fileobj)
-    elif header[0x10:0x14] == 'NRO0':
+    elif header[0x10:0x14] == b'NRO0':
         return NroFile(fileobj)
-    elif header[:4] == 'KIP1':
+    elif header[:4] == b'KIP1':
         return KipFile(fileobj)
     else:
         raise NxoException("not an NRO or NSO or KIP file")
@@ -544,36 +560,36 @@ def load_nxo(fileobj):
 
 try:
     import idaapi
-    from idc import *
-    from idc_bc695 import *
+    import idc
 except ImportError:
     pass
 else:
     # IDA specific code
     def accept_file(li, n):
-        if not isinstance(n, (int,long)) or n == 0:
+        print('accept_file')
+        if not isinstance(n, int_types) or n == 0:
             li.seek(0)
-            if li.read(4) == 'NSO0':
+            if li.read(4) == b'NSO0':
                 return 'nxo.py: Switch binary (NSO)'
             li.seek(0)
-            if li.read(4) == 'KIP1':
+            if li.read(4) == b'KIP1':
                 return 'nxo.py: Switch binary (KIP)'
             li.seek(0x10)
-            if li.read(4) == 'NRO0':
+            if li.read(4) == b'NRO0':
                 return 'nxo.py: Switch binary (NRO)'
         return 0
 
     def ida_make_offset(f, ea):
         if f.armv7:
-            MakeDword(ea)
+            idaapi.create_data(ea, idc.FF_DWORD, 4, idaapi.BADADDR)
         else:
-            MakeQword(ea)
-        OpOff(ea, 0, 0)
+            idaapi.create_data(ea, idc.FF_QWORD, 8, idaapi.BADADDR)
+        idc.op_plain_offset(ea, 0, 0)
 
     def find_bl_targets(text_start, text_end):
         targets = set()
         for pc in range(text_start, text_end, 4):
-            d = Dword(pc)
+            d = idc.get_wide_dword(pc)
             if (d & 0xfc000000) == 0x94000000:
                 imm = d & 0x3ffffff
                 if imm & 0x2000000:
@@ -586,16 +602,16 @@ else:
         return targets
 
     def load_file(li, neflags, format):
-        idaapi.set_processor_type("arm", idaapi.SETPROC_ALL|idaapi.SETPROC_FATAL)
+        idaapi.set_processor_type("arm", idaapi.SETPROC_LOADER_NON_FATAL|idaapi.SETPROC_LOADER)
         f = load_nxo(li)
         if f.armv7:
-            SetShortPrm(INF_LFLAGS, GetShortPrm(INF_LFLAGS) | LFLG_PC_FLAT)
+            idc.set_inf_attr(idc.INF_LFLAGS, idc.get_inf_attr(idc.INF_LFLAGS) | idc.LFLG_PC_FLAT)
         else:
-            SetShortPrm(INF_LFLAGS, GetShortPrm(INF_LFLAGS) | LFLG_64BIT)
+            idc.set_inf_attr(idc.INF_LFLAGS, idc.get_inf_attr(idc.INF_LFLAGS) | idc.LFLG_64BIT)
 
-        SetCharPrm(INF_DEMNAMES, idaapi.DEMNAM_GCC3)
+        idc.set_inf_attr(idc.INF_DEMNAMES, idaapi.DEMNAM_GCC3)
         idaapi.set_compiler_id(idaapi.COMP_GNU)
-        idaapi.add_til2('gnulnx_arm' if f.armv7 else 'gnulnx_arm64', 1)
+        idaapi.add_til('gnulnx_arm' if f.armv7 else 'gnulnx_arm64', 1)
 
         loadbase = 0x60000000 if f.armv7 else 0x7100000000
 
@@ -640,8 +656,8 @@ else:
         idaapi.update_segm(segm)
         for i,s in enumerate(f.symbols):
             if not s.shndx and s.name:
-                MakeQword(undef_ea)
-                idaapi.do_name_anyway(undef_ea, s.name)
+                idaapi.create_data(undef_ea, idc.FF_QWORD, 8, idaapi.BADADDR)
+                idaapi.force_name(undef_ea, s.name)
                 s.resolved = undef_ea
                 undef_ea += undef_entry_size
             elif i != 0:
@@ -649,10 +665,10 @@ else:
                 s.resolved = loadbase + s.value
                 if s.name:
                     if s.type == STT_FUNC:
-                        print hex(s.resolved), s.name
+                        print(hex(s.resolved), s.name)
                         idaapi.add_entry(s.resolved, s.resolved, s.name, 0)
                     else:
-                        idaapi.do_name_anyway(s.resolved, s.name)
+                        idaapi.force_name(s.resolved, s.name)
 
             else:
                 # NULL symbol
@@ -669,11 +685,11 @@ else:
             target = offset + loadbase
             if r_type in (R_ARM_GLOB_DAT, R_ARM_JUMP_SLOT, R_ARM_ABS32):
                 if not sym:
-                    print 'error: relocation at %X failed' % target
+                    print('error: relocation at %X failed' % target)
                 else:
-                    idaapi.put_long(target, sym.resolved)
+                    idaapi.put_dword(target, sym.resolved)
             elif r_type == R_ARM_RELATIVE:
-                idaapi.put_long(target, idaapi.get_long(target) + loadbase)
+                idaapi.put_dword(target, idaapi.get_dword(target) + loadbase)
             elif r_type in (R_AARCH64_GLOB_DAT, R_AARCH64_JUMP_SLOT, R_AARCH64_ABS64):
                 idaapi.put_qword(target, sym.resolved + addend)
                 if addend == 0:
@@ -683,19 +699,19 @@ else:
                 if addend < f.textsize:
                     funcs.add(loadbase + addend)
             else:
-                print 'TODO r_type %d' % (r_type,)
+                print('TODO r_type %d' % (r_type,))
             ida_make_offset(f, target)
 
         for func, target in f.plt_entries:
             if target in got_name_lookup:
                 addr = loadbase + func
                 funcs.add(addr)
-                idaapi.do_name_anyway(addr, got_name_lookup[target])
+                idaapi.force_name(addr, got_name_lookup[target])
 
         funcs |= find_bl_targets(loadbase, loadbase+f.textsize)
 
         for addr in sorted(funcs, reverse=True):
-            AutoMark(addr, AU_CODE)
-            AutoMark(addr, AU_PROC)
+            idc.AutoMark(addr, idc.AU_CODE)
+            idc.AutoMark(addr, idc.AU_PROC)
 
         return 1
