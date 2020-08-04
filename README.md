@@ -3,10 +3,10 @@ nxo64.py
 
 nxo64.py is an IDAPython loader for NSO / NRO files.
 
-kernel80.py
+kernel50.py
 ========
 
-kernel80.py is an IDAPython loader for the Nintendo Switch kernel (Firmware 8.0.0+).
+kernel50.py is an IDAPython loader for the Nintendo Switch kernel (Firmware 5.0.0+).
 
 Installation
 ============

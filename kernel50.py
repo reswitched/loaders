@@ -11,7 +11,7 @@
 # CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE
 # OR PERFORMANCE OF THIS SOFTWARE.
 
-# kernel.py: IDA loader for 8.0.0+ Horizon Kernel
+# kernel.py: IDA loader for 5.0.0+ Horizon Kernel
 from __future__ import print_function
 
 import gzip, math, os, re, struct, sys
@@ -211,16 +211,68 @@ class ElfSym(object):
             self.name, self.shndx, self.value, self.size, self.vis, self.type, self.bind)
 
 
+def is_valid_kernel_map_impl(ts, te, rs, re, ds, de, bs, be, i1, dn):
+    if ts != 0:
+        return False
+    if ts >= te:
+        return False
+    if te & 0xFFF:
+        return False
+    if te > rs:
+        return False
+    if rs & 0xFFF:
+        return False
+    if rs >= re:
+        return False
+    if re & 0xFFF:
+        return False
+    if re > ds:
+        return False
+    if ds & 0xFFF:
+        return False
+    if ds >= de:
+        return False
+    if de > bs:
+        return False
+    if bs > be:
+        return False
+    if be > i1:
+        return False
+    if not ((ds <= dn and dn < de) or (rs <= dn and dn < re)):
+        return False
+    return True
+
+def is_valid_kernel_map(dat, ofs):
+    ts, te, rs, re, ds, de, bs, be, i1, dn, ns, ne = up('<IIIIIIIIIIII', dat[ofs:ofs+0x30])
+    return is_valid_kernel_map_impl(ts, te, rs, re, ds, de, bs, be, i1, dn)
+
+def is_valid_kernel_map_5x(dat, ofs):
+    ts, te, rs, re, ds, de, bs, be, i1, dn, cl = up('<QQQQQQQQQQQ', dat[ofs:ofs+0x58])
+    return is_valid_kernel_map_impl(ts, te, rs, re, ds, de, bs, be, i1, dn)
+
 class Kernel80(object):
     def __init__(self, fileobj):
         f = BinFile(fileobj)
 
         crt0 = bytes(f.read(0x2000))
+        kmap = -1
+        for mapoff in xrange(0, len(crt0) - 0x30, 4):
+            if is_valid_kernel_map(crt0, mapoff):
+                textOffset, textEndOffset, rodataOffset, rodataEndOffset, \
+                dataOffset, dataEndOffset, bssOffset, bssEndOffset, ini1Offset, \
+                dynamicOffset, initArrayOffset, initArrayEndOffset = up("<12I", crt0[mapoff:mapoff+0x30])
+                f.seek(ini1Offset)
+                if bytes(f.read(4)) == b'INI1' or (0x100000 <= ini1Offset and ini1Offset <= 0x400000):
+                    kmap = mapoff
+                    break
+            elif mapoff <= len(crt0) - 0x58 and is_valid_kernel_map_5x(crt0, mapoff):
+                textOffset, textEndOffset, rodataOffset, rodataEndOffset, \
+                dataOffset, dataEndOffset, bssOffset, bssEndOffset, ini1Offset, \
+                dynamicOffset, corelocalOffset = up("<11Q", crt0[mapoff:mapoff+0x58])
+                kmap = mapoff
+                break
         f.seek(0)
-        mapoff = crt0.find(b"\x3E\x40\x1C\xD5") - 0x30
-        textOffset, textEndOffset, rodataOffset, rodataEndOffset, \
-        dataOffset, dataEndOffset, bssOffset, bssEndOffset, ini1Offset, \
-        dynamicOffset, initArrayOffset, initArrayEndOffset = up("<12I", crt0[mapoff:mapoff+0x30])
+        assert kmap != -1
 
         b = 0x80060000
         self.textoff    = textOffset
@@ -414,7 +466,7 @@ else:
         if not isinstance(n, int_types) or n == 0:
             li.seek(0)
             if li.read(4) == b'\xDFO\x03\xD5':
-                return '8.0+ KNX'
+                return '5.0+ KNX'
         return 0
 
     def ida_make_offset(f, ea):
