@@ -256,7 +256,7 @@ class Kernel80(object):
 
         crt0 = bytes(f.read(0x2000))
         kmap = -1
-        for mapoff in xrange(0, len(crt0) - 0x30, 4):
+        for mapoff in iter_range(0, len(crt0) - 0x30, 4):
             if is_valid_kernel_map(crt0, mapoff):
                 textOffset, textEndOffset, rodataOffset, rodataEndOffset, \
                 dataOffset, dataEndOffset, bssOffset, bssEndOffset, ini1Offset, \
@@ -309,7 +309,7 @@ class Kernel80(object):
         self.dynamic = dynamic = {}
         for i in MULTIPLE_DTS:
             dynamic[i] = []
-        for i in iter_range((flatsize - self.dynamicoff) / 0x10):
+        for i in iter_range((flatsize - self.dynamicoff) // 0x10):
             tag, val = f.read('II' if self.armv7 else 'QQ')
             if tag == DT_NULL:
                 break
@@ -423,7 +423,7 @@ class Kernel80(object):
         locations = set()
         f.seek(offset)
         relocsize = 8 if self.armv7 else 0x18
-        for i in iter_range(size / relocsize):
+        for i in iter_range(size // relocsize):
             # NOTE: currently assumes all armv7 relocs have no addends,
             # and all 64-bit ones do.
             if self.armv7:
