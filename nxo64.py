@@ -217,7 +217,6 @@ class SegmentBuilder(object):
             return
         if size is None:
             size = end-start
-        assert size > 0
         r = Range(start, size)
         for i in self.segments:
             if i.range.includes(r):
