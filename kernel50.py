@@ -444,7 +444,7 @@ class Kernel80(object):
         return locations
 
     def get_dynstr(self, o):
-        return self.dynstr[o:self.dynstr.index(b'\x00', o)]
+        return ascii_string(self.dynstr[o:self.dynstr.index(b'\x00', o)])
 
 class NxoException(Exception):
     pass

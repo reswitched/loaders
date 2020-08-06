@@ -174,7 +174,7 @@ else:
             return parts
 
     class Emulator:
-        REGISTER_IDS = [UC_ARM64_REG_X0 + i for i in xrange(29)] + [UC_ARM64_REG_X29, UC_ARM64_REG_X30]
+        REGISTER_IDS = [UC_ARM64_REG_X0 + i for i in iter_range(29)] + [UC_ARM64_REG_X29, UC_ARM64_REG_X30]
 
         def __init__(self):
             self.vbar = -1
@@ -432,7 +432,7 @@ else:
         last = text_start - 8
         for offset in iter_range(0, len(text), 4):
             try:
-                insn = md.disasm(text[offset:offset+4], text_start + offset).next()
+                insn = next(md.disasm(text[offset:offset+4], text_start + offset))
             except StopIteration:
                 # invalid
                 #print("INVAL: 0x%x" % (text_start + offset))
@@ -505,7 +505,7 @@ else:
                                         patch(add_bytes, add_address)
                                     del constants[reg_name]
             if not processed:
-                for k in constants.keys():
+                for k in list(constants.keys()):
                     if k in insn.op_str or k.replace('x','w') in insn.op_str:
                         #print('invalidating %s = 0x%X' % (k, constants[k]['value']))
                         del constants[k]
